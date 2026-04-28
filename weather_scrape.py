@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Main weather scraper - orchestrates all data sources.
-Imports from modular source files: nws.py, cwop.py, mping.py
+Imports from modular source files: nws.py, cwop.py, mping.py, rainviewer.py
 """
 import json
 import hashlib
@@ -11,6 +11,7 @@ from pathlib import Path
 from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons
 from cwop import get_cwop_stations
 from mping import fetch_mping, MPING_ENABLED, MPING_API_KEY
+from rainviewer import get_rainviewer_data
 
 BSE_DIR = Path.home() / "Developer" / "weather-agent"
 DATA_DIR = BSE_DIR / "data"
@@ -25,7 +26,7 @@ def log(msg):
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
 
-def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None):
+def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None):
     """Hash the meaningful data to detect duplicates."""
     parts = []
     if afd:
@@ -51,6 +52,15 @@ def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_report
             parts.append(r.get("time", ""))
             parts.append(r.get("type", ""))
             parts.append(str(r.get("hail_size", "")))
+    # Add alert polygons
+    if alert_polygons:
+        for p in alert_polygons:
+            parts.append(p.get("event", ""))
+            parts.append(p.get("severity", ""))
+    # Add RainViewer data
+    if rainviewer_data:
+        parts.append(rainviewer_data.get("latest_frame_time", ""))
+        parts.append(str(rainviewer_data.get("has_recent_activity", "")))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 def cleanup_old():
@@ -82,6 +92,8 @@ def main():
     forecast = get_forecast()
     hourly = get_hourly()
     cwop_stations = get_cwop_stations()
+    alert_polygons = get_alert_polygons()
+    rainviewer_data = get_rainviewer_data()
     
     mping_reports = []
     if MPING_ENABLED and MPING_API_KEY:
@@ -89,7 +101,7 @@ def main():
     elif MPING_ENABLED:
         log("[mPING] Enabled but no API key set. Skipping.")
     
-    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports)
+    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data)
     
     # Check if existing file has identical data
     if data_file.exists():
@@ -116,6 +128,8 @@ def main():
         "hourly": hourly,
         "cwop_updated": datetime.now(timezone.utc).isoformat(),
         "cwop_stations": cwop_stations,
+        "alert_polygons": alert_polygons,
+        "rainviewer": rainviewer_data,
     }
     
     if mping_reports:
@@ -125,7 +139,7 @@ def main():
     with open(data_file, "w") as f:
         json.dump(payload, f, indent=2)
     
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)}")
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'}")
     cleanup_old()
 
 if __name__ == "__main__":

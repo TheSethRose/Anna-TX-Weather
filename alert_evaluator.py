@@ -336,7 +336,7 @@ def compose_mping(evaluation):
     
     if evaluation["type"] == "hail":
         lines.append(f"Hail reports: {evaluation['count']} in last hour")
-        lines.append(f"Largest: {evaluation['max_size']}" diameter")
+        lines.append(f"Largest: {evaluation['max_size']}\" diameter")
         if evaluation.get("locations"):
             lines.append(f"Locations: {', '.join(evaluation['locations'])}")
     elif evaluation["type"] == "rain":
