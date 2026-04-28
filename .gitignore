@@ -1,0 +1,16 @@
+# Data and logs (sensitive / runtime)
+data/
+logs/
+*.log
+*.err
+
+# State files
+alert-state.json
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
