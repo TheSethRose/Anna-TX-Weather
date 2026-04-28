@@ -68,9 +68,12 @@ def compact_for_hermes(data_file, data, max_age_minutes):
         "alert_polygons": data.get("alert_polygons", []),
         "forecast": data.get("forecast", []),
         "hourly": data.get("hourly", []),
+        "grid_details": data.get("grid_details", {}),
+        "local_products": data.get("local_products", {}),
         "afd": data.get("afd", {}),
         "cwop_stations": data.get("cwop_stations", []),
         "rainviewer": data.get("rainviewer"),
+        "mping_reports": data.get("mping_reports", []),
         "spc": data.get("spc", {}),
     }
 

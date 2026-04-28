@@ -4,15 +4,17 @@ Requires free API key from mping.ou.edu.
 https://mping.ou.edu/api/index.html
 """
 import json
+import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 
 LAT, LON = 33.349, -96.548
 HEADERS = {"User-Agent": "weather-scrape/1.0 (personal use)"}
-MPING_ENABLED = False  # Set to True after getting API key
-MPING_API_KEY = ""  # Set this to your mPING API key from mping.ou.edu
+MPING_API_KEY = os.environ.get("MPING_API_KEY", "")
+MPING_ENABLED = bool(MPING_API_KEY)
 
-def fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24):
+def fetch_mping(lat=LAT, lon=LON, radius_miles=20, hours=24):
     """Fetch mPING reports within radius and last N hours.
     Uses mPING API v2 (requires API key set in MPING_API_KEY).
     """
@@ -24,8 +26,12 @@ def fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24):
     obtime_gte = cutoff.strftime("%Y-%m-%d %H:%M:%S")
     
     # Build URL with filters
-    params = f"?obtime_gte={obtime_gte}&distance_from_point={lat},{lon},0.3"
-    url = f"https://mping.ou.edu/api/v2/reports{params}"
+    params = urlencode({
+        "obtime_gte": obtime_gte,
+        "dist": round(radius_miles * 1609.344),
+        "point": f"{lon},{lat}",
+    })
+    url = f"https://mping.ou.edu/mping/api/v2/reports?{params}"
     
     try:
         headers = {"Authorization": f"Token {MPING_API_KEY}"}
@@ -44,8 +50,6 @@ def fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24):
             if len(coords) >= 2:
                 r_lon, r_lat = coords[0], coords[1]
             else:
-                continue
-            if abs(r_lat - lat) > radius or abs(r_lon - lon) > radius:
                 continue
             filtered.append({
                 "time": r.get("obtime", ""),

@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 
 # Import from modular sources
-from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons
+from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons, get_grid_details, get_local_products
 from cwop import get_cwop_stations
 from mping import fetch_mping, MPING_ENABLED, MPING_API_KEY
 from rainviewer import get_rainviewer_data
@@ -42,7 +42,7 @@ def log(msg):
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
 
-def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None, spc_products=None):
+def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None, spc_products=None, grid_details=None, local_products=None):
     """Hash the meaningful data to detect duplicates."""
     parts = []
     if afd:
@@ -79,8 +79,17 @@ def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_report
         parts.append(str(rainviewer_data.get("has_recent_activity", "")))
     if spc_products:
         for feed in spc_products.values():
-            parts.append(feed.get("updated", ""))
-            parts.append(str(len(feed.get("items", []))))
+            if isinstance(feed, dict):
+                parts.append(feed.get("updated", ""))
+                parts.append(str(len(feed.get("items", []))))
+    if grid_details:
+        parts.append(str(grid_details.get("qpf_next_24h_inches", "")))
+        parts.append(str(grid_details.get("max_thunder_probability_24h", "")))
+        parts.append(str(grid_details.get("max_wind_gust_mph_24h", "")))
+    if local_products:
+        for products in local_products.values():
+            for product in products[:2]:
+                parts.append(product.get("issued", ""))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 def cleanup_old():
@@ -111,6 +120,8 @@ def main():
     alerts = get_alerts()
     forecast = get_forecast()
     hourly = get_hourly()
+    grid_details = get_grid_details()
+    local_products = get_local_products()
     cwop_stations = get_cwop_stations()
     alert_polygons = get_alert_polygons()
     rainviewer_data = get_rainviewer_data()
@@ -127,6 +138,8 @@ def main():
         "alerts": "ok",
         "forecast": "ok" if forecast else "empty",
         "hourly": "ok" if hourly else "empty",
+        "grid_details": "ok" if grid_details else "empty",
+        "local_products": "ok" if local_products else "empty",
         "cwop": "ok" if cwop_stations else "empty",
         "alert_polygons": "ok",
         "rainviewer": "ok" if rainviewer_data else "empty",
@@ -147,7 +160,7 @@ def main():
         cleanup_old()
         return
     
-    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data, spc_products)
+    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data, spc_products, grid_details, local_products)
     
     # Check if existing file has identical data
     if data_file.exists():
@@ -173,6 +186,8 @@ def main():
         "alerts": alerts,
         "forecast": forecast,
         "hourly": hourly,
+        "grid_details": grid_details,
+        "local_products": local_products,
         "cwop_updated": datetime.now(timezone.utc).isoformat(),
         "cwop_stations": cwop_stations,
         "alert_polygons": alert_polygons,
@@ -187,8 +202,9 @@ def main():
     with open(data_file, "w") as f:
         json.dump(payload, f, indent=2)
     
-    spc_count = sum(len(feed.get("items", [])) for feed in spc_products.values())
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'} spc={spc_count}")
+    spc_count = sum(len(feed.get("items", [])) for feed in spc_products.values() if isinstance(feed, dict))
+    local_count = sum(len(products) for products in local_products.values())
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} grid={'Y' if grid_details else 'N'} local_products={local_count} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'} spc={spc_count}")
     cleanup_old()
 
 if __name__ == "__main__":
