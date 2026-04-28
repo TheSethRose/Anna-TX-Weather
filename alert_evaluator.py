@@ -12,6 +12,9 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# Debug mode: pass --debug to always output debug info
+DEBUG = "--debug" in sys.argv
+
 BASE_DIR = Path.home() / "Developer" / "weather-agent"
 DATA_DIR = BASE_DIR / "data"
 STATE_FILE = BASE_DIR / "alert-state.json"
@@ -344,6 +347,94 @@ def compose_mping(evaluation):
     
     return "\n".join(lines)
 
+def compose_debug(data, state, now):
+    """Generate debug output showing what was checked."""
+    lines = ["=== WEATHER EVALUATOR DEBUG MODE ===", ""]
+    lines.append(f"Current time: {now.strftime('%Y-%m-%d %I:%M %p %Z')}")
+    lines.append(f"Hour: {now.hour}")
+    
+    if not data:
+        lines.append("")
+        lines.append("ERROR: No data available")
+        return "\n".join(lines)
+    
+    lines.append("")
+    lines.append("--- Data Status ---")
+    lines.append(f"Data fetched: {data.get('fetched_at', 'N/A')}")
+    
+    alerts = data.get("alerts", [])
+    lines.append(f"Active alerts: {len(alerts)}")
+    for a in alerts:
+        lines.append(f"  - {a.get('event', 'N/A')} ({a.get('severity', 'N/A')})")
+    
+    forecast = data.get("forecast", [])
+    lines.append(f"Forecast periods: {len(forecast)}")
+    
+    hourly = data.get("hourly", [])
+    lines.append(f"Hourly periods: {len(hourly)}")
+    
+    # Check what would have triggered
+    lines.append("")
+    lines.append("--- Evaluation Results ---")
+    
+    # Morning brief check
+    if now.hour == 7:
+        key = f"morning_{now.strftime('%Y-%m-%d')}"
+        if state.get(key):
+            lines.append("Morning brief: ALREADY SENT (state key exists)")
+        else:
+            lines.append("Morning brief: WOULD TRIGGER (but output is None in current logic)")
+    else:
+        lines.append(f"Morning brief: Not 7 AM (current hour: {now.hour})")
+    
+    # Evening outlook check
+    if now.hour == 19:
+        key = f"evening_{now.strftime('%Y-%m-%d')}"
+        if state.get(key):
+            lines.append("Evening outlook: ALREADY SENT (state key exists)")
+        else:
+            lines.append("Evening outlook: WOULD TRIGGER (but output is None in current logic)")
+    else:
+        lines.append(f"Evening outlook: Not 7 PM (current hour: {now.hour})")
+    
+    # Severe alert check
+    severe_alerts = [a for a in alerts if a.get("severity") in ("Severe", "Extreme")]
+    severe_hourly = [h for h in get_next_hours(hourly, 3) if is_severe_hourly(h)]
+    if severe_alerts or severe_hourly:
+        lines.append("Severe alert: WOULD TRIGGER")
+    else:
+        lines.append("Severe alert: No severe conditions in next 3 hours")
+    
+    # Imminent check
+    next_hour = get_next_hours(hourly, 1)
+    imminent = []
+    for h in next_hour:
+        precip = h.get("precip")
+        wind = parse_wind(h.get("wind", ""))
+        has_precip = False
+        if precip is not None and precip != "":
+            try:
+                has_precip = int(precip) > 30
+            except (ValueError, TypeError):
+                pass
+        if has_precip or wind >= 30:
+            imminent.append(h)
+    if imminent:
+        lines.append("Imminent alert: WOULD TRIGGER")
+    else:
+        lines.append("Imminent alert: No rain/wind in next hour")
+    
+    # State info
+    lines.append("")
+    lines.append("--- State File ---")
+    for k, v in sorted(state.items()):
+        lines.append(f"  {k}: {v}")
+    
+    lines.append("")
+    lines.append("=== END DEBUG ===")
+    
+    return "\n".join(lines)
+
 
 def main():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -423,6 +514,10 @@ def main():
     save_state(state)
 
     if output:
+        print(output)
+    elif DEBUG:
+        # Debug mode: always output something
+        output = compose_debug(data, state, now)
         print(output)
     else:
         log("No conditions met. Silent.")
