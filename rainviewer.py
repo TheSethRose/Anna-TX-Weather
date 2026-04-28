@@ -61,6 +61,8 @@ def get_rainviewer_data(lat=LAT, lon=LON):
         
         return {
             "latest_frame_time": latest_time.isoformat(),
+            "host": host,
+            "path": latest["path"],
             "latest_tile_url": tile_url,
             "latest_frame_url": tile_url,
             "tile": {"zoom": ZOOM, "x": tile_x, "y": tile_y},

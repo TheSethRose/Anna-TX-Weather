@@ -49,13 +49,15 @@ This is the severe-weather layer that makes the briefing feel serious instead of
 
 - Pulls RainViewer public radar metadata
 - Converts Anna's lat/lon to the correct map tile
-- Downloads the latest radar PNG locally
+- Renders a city-level NEXRAD reflectivity map over a dark labeled basemap
+- Frames Anna to the right so west-to-east storms have room on the image
+- Keeps the storm layer slightly transparent so towns and roads stay readable
 - Exposes the image path to Hermes
 
 When the weather is requested through Telegram, Hermes can attach the radar image with:
 
 ```text
-MEDIA:/Users/sethrose/Developer/weather-agent/data/radar/YYYY-MM-DD-latest.png
+MEDIA:/Users/sethrose/Developer/weather-agent/data/radar/YYYY-MM-DD-latest-map.png
 ```
 
 Hermes strips the `MEDIA:` line and sends the PNG as a native Telegram image.
@@ -64,6 +66,13 @@ Hermes strips the `MEDIA:` line and sends the PNG as a native Telegram image.
 
 - Fetches nearby NWS station observations
 - Stores temperature, dewpoint, humidity, wind, pressure, precipitation, and current conditions
+
+### Nearby Town Timing Grid
+
+- Stores 50 nearby town reference points around Anna
+- Includes latitude, longitude, distance from Anna, bearing, and compass direction
+- Includes a west-to-east storm-motion reference so Hermes can reason about upstream towns and rough timing
+- Uses static Census Gazetteer-derived coordinates, so it adds no recurring API calls
 
 ### mPING Reports
 
@@ -80,6 +89,8 @@ Hermes strips the `MEDIA:` line and sends the PNG as a native Telegram image.
 | `nws.py` | NWS API client for forecasts, alerts, grid details, and FWD local products. |
 | `spc.py` | SPC RSS and storm report fetcher. |
 | `rainviewer.py` | RainViewer radar tile metadata. |
+| `radar_map.py` | Renders the Telegram-ready radar map from free public tiles. |
+| `nearby_places.py` | Local town distance and storm-timing reference grid. |
 | `cwop.py` | Nearby station observations via NWS. |
 | `mping.py` | mPING API client, enabled by `MPING_API_KEY`. |
 
@@ -100,6 +111,7 @@ launchd
     -> SPC products and nearby storm reports
     -> RainViewer radar image
     -> nearby station observations
+    -> nearby town timing grid
     -> optional mPING reports
     -> data/YYYY-MM-DD.json
 
@@ -128,7 +140,8 @@ Each daily JSON file contains:
 - `grid_details` — QPF, thunder probability, gusts, weather windows, and hazards
 - `local_products` — FWD LSR/SPS/HWO products
 - `cwop_stations` — nearby station observations
-- `rainviewer` — radar tile URL and local PNG path
+- `nearby_places` — nearby town lat/lon, distance, bearing, and storm-motion reference
+- `rainviewer` — radar tile URL, raw tile path, and rendered map path
 - `spc` — SPC discussions, watches, outlooks, PDS watches, and nearby storm reports
 - `mping_reports` — nearby mPING reports when enabled
 

@@ -44,6 +44,17 @@ def freshness(data, max_age_minutes):
     }
 
 
+def compact_radar(rainviewer):
+    if not rainviewer:
+        return None
+    return {
+        "latest_frame_time": rainviewer.get("latest_frame_time"),
+        "latest_image_path": rainviewer.get("latest_image_path"),
+        "source": rainviewer.get("source"),
+        "map_source": "IEM NEXRAD WMS over Carto dark basemap",
+    }
+
+
 def compact_for_hermes(data_file, data, max_age_minutes):
     now = datetime.now(TZ)
     if data is None:
@@ -61,6 +72,7 @@ def compact_for_hermes(data_file, data, max_age_minutes):
         "hour_local": now.hour,
         "data_file": str(data_file),
         "freshness": fresh,
+        "schema_version": data.get("schema_version"),
         "location": data.get("location", {}),
         "source_status": data.get("source_status", {}),
         "fetched_at": data.get("fetched_at"),
@@ -72,7 +84,8 @@ def compact_for_hermes(data_file, data, max_age_minutes):
         "local_products": data.get("local_products", {}),
         "afd": data.get("afd", {}),
         "cwop_stations": data.get("cwop_stations", []),
-        "rainviewer": data.get("rainviewer"),
+        "nearby_places": data.get("nearby_places", []),
+        "rainviewer": compact_radar(data.get("rainviewer")),
         "mping_reports": data.get("mping_reports", []),
         "spc": data.get("spc", {}),
     }

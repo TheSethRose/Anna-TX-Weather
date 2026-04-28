@@ -12,6 +12,8 @@ from urllib.request import Request, urlopen
 from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons, get_grid_details, get_local_products
 from cwop import get_cwop_stations
 from mping import fetch_mping, MPING_ENABLED, MPING_API_KEY
+from nearby_places import nearby_places
+from radar_map import render_radar_map
 from rainviewer import get_rainviewer_data
 from spc import get_spc_products
 
@@ -20,6 +22,7 @@ DATA_DIR = BASE_DIR / "data"
 LOG_FILE = BASE_DIR / "logs" / "weather-scrape.log"
 TZ = __import__('zoneinfo').ZoneInfo("America/Chicago")
 RETENTION_DAYS = 7
+DATA_SCHEMA_VERSION = "2026-04-28-radar-map-v2-places-v1"
 
 
 def download_file(url, path):
@@ -44,7 +47,7 @@ def log(msg):
 
 def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None, spc_products=None, grid_details=None, local_products=None):
     """Hash the meaningful data to detect duplicates."""
-    parts = []
+    parts = [DATA_SCHEMA_VERSION]
     if afd:
         parts.append(afd.get("issued", ""))
     parts.append(str(len(alerts)))
@@ -77,6 +80,7 @@ def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_report
     if rainviewer_data:
         parts.append(rainviewer_data.get("latest_frame_time", ""))
         parts.append(str(rainviewer_data.get("has_recent_activity", "")))
+        parts.append(str(rainviewer_data.get("latest_image_path", "")))
     if spc_products:
         for feed in spc_products.values():
             if isinstance(feed, dict):
@@ -126,12 +130,22 @@ def main():
     alert_polygons = get_alert_polygons()
     rainviewer_data = get_rainviewer_data()
     if rainviewer_data:
-        radar_path = download_file(
+        radar_path = None
+        try:
+            radar_path = render_radar_map(
+                rainviewer_data,
+                DATA_DIR / "radar" / f"{date_str}-latest-map.png",
+            )
+        except Exception as exc:
+            log(f"Radar map render failed: {exc}")
+        raw_radar_path = download_file(
             rainviewer_data.get("latest_tile_url") or rainviewer_data.get("latest_frame_url"),
-            DATA_DIR / "radar" / f"{date_str}-latest.png",
+            DATA_DIR / "radar" / f"{date_str}-latest-tile.png",
         )
         if radar_path:
             rainviewer_data["latest_image_path"] = radar_path
+        if raw_radar_path:
+            rainviewer_data["latest_tile_path"] = raw_radar_path
     spc_products = get_spc_products()
     source_status = {
         "afd": "ok" if afd else "empty",
@@ -161,6 +175,7 @@ def main():
         return
     
     new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data, spc_products, grid_details, local_products)
+    places = nearby_places()
     
     # Check if existing file has identical data
     if data_file.exists():
@@ -179,6 +194,7 @@ def main():
     
     payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "schema_version": DATA_SCHEMA_VERSION,
         "data_hash": new_hash,
         "location": {"lat": 33.349, "lon": -96.548, "name": "Anna, TX"},
         "source_status": source_status,
@@ -191,6 +207,7 @@ def main():
         "cwop_updated": datetime.now(timezone.utc).isoformat(),
         "cwop_stations": cwop_stations,
         "alert_polygons": alert_polygons,
+        "nearby_places": places,
         "rainviewer": rainviewer_data,
         "spc": spc_products,
     }
@@ -204,7 +221,7 @@ def main():
     
     spc_count = sum(len(feed.get("items", [])) for feed in spc_products.values() if isinstance(feed, dict))
     local_count = sum(len(products) for products in local_products.values())
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} grid={'Y' if grid_details else 'N'} local_products={local_count} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'} spc={spc_count}")
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} grid={'Y' if grid_details else 'N'} local_products={local_count} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} places={len(places)} rainviewer={'Y' if rainviewer_data else 'N'} spc={spc_count}")
     cleanup_old()
 
 if __name__ == "__main__":
