@@ -4,11 +4,13 @@ Free public API - no API key required.
 Provides radar frames, storm tracking context for Anna, TX.
 """
 import json
+import math
 import subprocess
 from datetime import datetime, timezone
 
 RAINVIEWER_API = "https://api.rainviewer.com/public/weather-maps.json"
 LAT, LON = 33.349, -96.548  # Anna, TX default
+ZOOM = 7
 
 def fetch(url):
     """Fetch JSON via curl (bypasses Python urllib timeouts)."""
@@ -24,6 +26,14 @@ def fetch(url):
         return json.loads(result.stdout)
     except Exception as e:
         return None
+
+def lat_lon_to_tile(lat, lon, zoom):
+    """Convert latitude/longitude to Web Mercator tile coordinates."""
+    lat_rad = math.radians(lat)
+    n = 2 ** zoom
+    x = int((lon + 180.0) / 360.0 * n)
+    y = int((1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
+    return x, y
 
 def get_rainviewer_data(lat=LAT, lon=LON):
     """Get latest RainViewer radar data for a point.
@@ -43,17 +53,18 @@ def get_rainviewer_data(lat=LAT, lon=LON):
         latest_time = datetime.fromtimestamp(latest["time"], tz=timezone.utc)
         host = data.get("host", "https://tilecache.rainviewer.com")
         
-        # Build tile URL for Anna area (zoom 7 = ~400mi view, max zoom for RainViewer)
-        tile_url = f"{host}{latest['path']}/256/7/{lat}/{lon}/1_1.png"
+        tile_x, tile_y = lat_lon_to_tile(lat, lon, ZOOM)
+        tile_url = f"{host}{latest['path']}/256/{ZOOM}/{tile_x}/{tile_y}/1/1_1.png"
         
         # Check last 3 frames (30 mins) for activity near Anna
         recent_frames = [f for f in frames if f["time"] >= latest["time"] - 1800]  # Last 30 mins
         
         return {
             "latest_frame_time": latest_time.isoformat(),
+            "latest_tile_url": tile_url,
             "latest_frame_url": tile_url,
+            "tile": {"zoom": ZOOM, "x": tile_x, "y": tile_y},
             "recent_frames_count": len(recent_frames),
-            "has_recent_activity": len(recent_frames) > 0,
             "source": "RainViewer",
         }
     except Exception as e:

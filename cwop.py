@@ -20,14 +20,14 @@ def fetch(url):
 def get_nearby_stations():
     """Get list of weather stations near Anna, TX."""
     try:
-        url = f"https://api.weather.gov/points/{LAT},{LON}/stations?limit={MAX_STATIONS}"
+        url = f"https://api.weather.gov/points/{LAT},{LON}/stations"
         data = fetch(url)
         stations = []
         for feature in data.get("features", []):
             props = feature.get("properties", {})
             geom = feature.get("geometry", {})
             coords = geom.get("coordinates", [])
-            lon, lat = coords[0] if len(coords) > 0 else (0, 0)
+            lon, lat = coords[:2] if len(coords) >= 2 else (0, 0)
             stations.append({
                 "id": props.get("stationIdentifier", ""),
                 "name": props.get("name", ""),
@@ -37,7 +37,7 @@ def get_nearby_stations():
             })
         # Sort by distance
         stations.sort(key=lambda x: x["distance"])
-        return stations
+        return stations[:MAX_STATIONS]
     except Exception as e:
         return []
 

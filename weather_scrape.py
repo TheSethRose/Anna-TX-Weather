@@ -6,27 +6,43 @@ import json
 import hashlib
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 # Import from modular sources
 from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons
 from cwop import get_cwop_stations
 from mping import fetch_mping, MPING_ENABLED, MPING_API_KEY
 from rainviewer import get_rainviewer_data
+from spc import get_spc_products
 
-BSE_DIR = Path.home() / "Developer" / "weather-agent"
-DATA_DIR = BSE_DIR / "data"
-LOG_FILE = BSE_DIR / "logs" / "weather-scrape.log"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+LOG_FILE = BASE_DIR / "logs" / "weather-scrape.log"
 TZ = __import__('zoneinfo').ZoneInfo("America/Chicago")
 RETENTION_DAYS = 7
+
+
+def download_file(url, path):
+    if not url:
+        return None
+    req = Request(url, headers={"User-Agent": "weather-scrape/1.0 (personal use)"})
+    try:
+        with urlopen(req, timeout=20) as resp:
+            if resp.status != 200:
+                return None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(resp.read())
+            return str(path)
+    except Exception:
+        return None
 
 def log(msg):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     line = f"[{ts}] {msg}"
-    print(line)
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
 
-def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None):
+def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None, alert_polygons=None, rainviewer_data=None, spc_products=None):
     """Hash the meaningful data to detect duplicates."""
     parts = []
     if afd:
@@ -61,6 +77,10 @@ def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_report
     if rainviewer_data:
         parts.append(rainviewer_data.get("latest_frame_time", ""))
         parts.append(str(rainviewer_data.get("has_recent_activity", "")))
+    if spc_products:
+        for feed in spc_products.values():
+            parts.append(feed.get("updated", ""))
+            parts.append(str(len(feed.get("items", []))))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
 
 def cleanup_old():
@@ -94,14 +114,40 @@ def main():
     cwop_stations = get_cwop_stations()
     alert_polygons = get_alert_polygons()
     rainviewer_data = get_rainviewer_data()
+    if rainviewer_data:
+        radar_path = download_file(
+            rainviewer_data.get("latest_tile_url") or rainviewer_data.get("latest_frame_url"),
+            DATA_DIR / "radar" / f"{date_str}-latest.png",
+        )
+        if radar_path:
+            rainviewer_data["latest_image_path"] = radar_path
+    spc_products = get_spc_products()
+    source_status = {
+        "afd": "ok" if afd else "empty",
+        "alerts": "ok",
+        "forecast": "ok" if forecast else "empty",
+        "hourly": "ok" if hourly else "empty",
+        "cwop": "ok" if cwop_stations else "empty",
+        "alert_polygons": "ok",
+        "rainviewer": "ok" if rainviewer_data else "empty",
+        "spc": "ok" if spc_products else "empty",
+        "mping": "disabled",
+    }
     
     mping_reports = []
     if MPING_ENABLED and MPING_API_KEY:
         mping_reports = fetch_mping()
+        source_status["mping"] = "ok" if mping_reports else "empty"
     elif MPING_ENABLED:
         log("[mPING] Enabled but no API key set. Skipping.")
+        source_status["mping"] = "missing_api_key"
+
+    if not forecast or not hourly:
+        log("Core NWS forecast/hourly data missing. Refusing to overwrite current data file.")
+        cleanup_old()
+        return
     
-    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data)
+    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports, alert_polygons, rainviewer_data, spc_products)
     
     # Check if existing file has identical data
     if data_file.exists():
@@ -122,6 +168,7 @@ def main():
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "data_hash": new_hash,
         "location": {"lat": 33.349, "lon": -96.548, "name": "Anna, TX"},
+        "source_status": source_status,
         "afd": afd,
         "alerts": alerts,
         "forecast": forecast,
@@ -130,6 +177,7 @@ def main():
         "cwop_stations": cwop_stations,
         "alert_polygons": alert_polygons,
         "rainviewer": rainviewer_data,
+        "spc": spc_products,
     }
     
     if mping_reports:
@@ -139,7 +187,8 @@ def main():
     with open(data_file, "w") as f:
         json.dump(payload, f, indent=2)
     
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'}")
+    spc_count = sum(len(feed.get("items", [])) for feed in spc_products.values())
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)} alert_poly={len(alert_polygons)} rainviewer={'Y' if rainviewer_data else 'N'} spc={spc_count}")
     cleanup_old()
 
 if __name__ == "__main__":
