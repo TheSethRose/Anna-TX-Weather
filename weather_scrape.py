@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
+"""Main weather scraper - orchestrates all data sources.
+Imports from modular source files: nws.py, cwop.py, mping.py
+"""
 import json
-import os
 import hashlib
 from datetime import datetime, timezone, timedelta
-from zoneinfo import ZoneInfo
 from pathlib import Path
-from urllib.request import urlopen, Request
 
-LAT, LON = 33.349, -96.548
-MPING_ENABLED = False  # Set to True after getting API key from mping.ou.edu
-MPING_API_KEY = ""  # Set this to your mPING API key from mping.ou.edu
-BASE_DIR = Path.home() / "Developer" / "weather-agent"
-DATA_DIR = BASE_DIR / "data"
-LOG_FILE = BASE_DIR / "logs" / "weather-scrape.log"
-HEADERS = {"User-Agent": "weather-scrape/1.0 (personal use)"}
-TZ = ZoneInfo("America/Chicago")
+# Import from modular sources
+from nws import get_afd, get_alerts, get_forecast, get_hourly, get_alert_polygons
+from cwop import get_cwop_stations
+from mping import fetch_mping, MPING_ENABLED, MPING_API_KEY
+
+BSE_DIR = Path.home() / "Developer" / "weather-agent"
+DATA_DIR = BSE_DIR / "data"
+LOG_FILE = BSE_DIR / "logs" / "weather-scrape.log"
+TZ = __import__('zoneinfo').ZoneInfo("America/Chicago")
 RETENTION_DAYS = 7
-
 
 def log(msg):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -25,160 +25,8 @@ def log(msg):
     with open(LOG_FILE, "a") as f:
         f.write(line + "\n")
 
-
-def fetch(url):
-    req = Request(url, headers=HEADERS)
-    with urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def get_afd():
-    try:
-        data = fetch("https://api.weather.gov/products/types/AFD/locations/FWD")
-        if not data.get("@graph"):
-            return None
-        latest = data["@graph"][0]
-        product_url = latest.get("@id")
-        if not product_url:
-            return None
-        product = fetch(product_url)
-        return {
-            "issued": product.get("issuanceTime", ""),
-            "title": product.get("productName", ""),
-            "text": product.get("productText", ""),
-        }
-    except Exception as e:
-        log(f"AFD fetch error: {e}")
-        return None
-
-
-def get_alerts():
-    try:
-        data = fetch(f"https://api.weather.gov/alerts/active?point={LAT},{LON}")
-        alerts = []
-        for feature in data.get("features", []):
-            props = feature.get("properties", {})
-            alerts.append({
-                "event": props.get("event", ""),
-                "severity": props.get("severity", ""),
-                "urgency": props.get("urgency", ""),
-                "headline": props.get("headline", ""),
-                "description": props.get("description", ""),
-                "instruction": props.get("instruction", ""),
-                "effective": props.get("effective", ""),
-                "expires": props.get("expires", ""),
-            })
-        return alerts
-    except Exception as e:
-        log(f"Alerts fetch error: {e}")
-        return []
-
-
-def get_forecast():
-    try:
-        points = fetch(f"https://api.weather.gov/points/{LAT},{LON}")
-        forecast_url = points["properties"]["forecast"]
-        data = fetch(forecast_url)
-        periods = []
-        for p in data["properties"]["periods"][:7]:
-            periods.append({
-                "name": p.get("name", ""),
-                "start": p.get("startTime", ""),
-                "end": p.get("endTime", ""),
-                "temp": p.get("temperature", ""),
-                "temp_unit": p.get("temperatureUnit", ""),
-                "wind": p.get("windSpeed", ""),
-                "wind_dir": p.get("windDirection", ""),
-                "forecast": p.get("detailedForecast", ""),
-                "short": p.get("shortForecast", ""),
-                "precip": p.get("probabilityOfPrecipitation", {}).get("value", ""),
-            })
-        return periods
-    except Exception as e:
-        log(f"Forecast fetch error: {e}")
-        return []
-
-
-def get_hourly():
-    try:
-        points = fetch(f"https://api.weather.gov/points/{LAT},{LON}")
-        hourly_url = points["properties"]["forecastHourly"]
-        data = fetch(hourly_url)
-        hours = []
-        for p in data["properties"]["periods"][:24]:
-            hours.append({
-                "time": p.get("startTime", ""),
-                "temp": p.get("temperature", ""),
-                "temp_unit": p.get("temperatureUnit", ""),
-                "wind": p.get("windSpeed", ""),
-                "wind_dir": p.get("windDirection", ""),
-                "short": p.get("shortForecast", ""),
-                "precip": p.get("probabilityOfPrecipitation", {}).get("value", ""),
-                "humidity": p.get("relativeHumidity", {}).get("value", ""),
-                "dewpoint": p.get("dewpoint", {}).get("value", ""),
-            })
-        return hours
-    except Exception as e:
-        log(f"Hourly fetch error: {e}")
-        return []
-
-
-def fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24):
-    """Fetch mPING reports within radius and last N hours.
-    Uses mPING API v2 (requires API key set in MPING_API_KEY).
-    """
-    if not MPING_API_KEY:
-        log("[mPING] No API key set. Skipping.")
-        return []
-    
-    # Calculate time filter
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    obtime_gte = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Build URL with filters
-    params = f"?obtime_gte={obtime_gte}&distance_from_point={lat},{lon},0.3"
-    url = f"https://mping.ou.edu/api/v2/reports{params}"
-    
-    try:
-        headers = {"Authorization": f"Token {MPING_API_KEY}"}
-        req = Request(url, headers={**HEADERS, **headers})
-        with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        reports = data.get("results", [])
-    except Exception as e:
-        log(f"[mPING] Fetch failed: {e}")
-        return []
-    
-    filtered = []
-    for r in reports:
-        try:
-            geom = r.get("geom", {})
-            coords = geom.get("coordinates", [])
-            if len(coords) >= 2:
-                r_lon, r_lat = coords[0], coords[1]
-            else:
-                continue
-            if abs(r_lat - lat) > radius or abs(r_lon - lon) > radius:
-                continue
-            filtered.append({
-                "time": r.get("obtime", ""),
-                "type": r.get("description", "unknown"),
-                "hail_size": r.get("hail_size_inches"),
-                "lat": r_lat,
-                "lon": r_lon,
-                "city": r.get("city", ""),
-                "state": r.get("state", ""),
-            })
-        except (KeyError, ValueError, TypeError):
-            continue
-    
-    log(f"[mPING] Found {len(filtered)} reports in last {hours}h")
-    return filtered
-
-
-def content_hash(afd, alerts, forecast, hourly, mping_reports=None):
+def content_hash(afd, alerts, forecast, hourly, cwop_stations=None, mping_reports=None):
     """Hash the meaningful data to detect duplicates."""
-    # Use key mutable fields: AFD issued time, alert count + event names, forecast first period name+temp, hourly first 3 temps
     parts = []
     if afd:
         parts.append(afd.get("issued", ""))
@@ -192,8 +40,18 @@ def content_hash(afd, alerts, forecast, hourly, mping_reports=None):
     for h in hourly[:3]:
         parts.append(str(h.get("temp", "")))
         parts.append(str(h.get("precip", "")))
+    # Add CWOP stations
+    if cwop_stations:
+        for s in cwop_stations[:3]:
+            parts.append(str(s.get("temp", "")))
+            parts.append(str(s.get("humidity", "")))
+    # Add mPING reports
+    if mping_reports:
+        for r in mping_reports:
+            parts.append(r.get("time", ""))
+            parts.append(r.get("type", ""))
+            parts.append(str(r.get("hail_size", "")))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
-
 
 def cleanup_old():
     cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
@@ -210,27 +68,29 @@ def cleanup_old():
     if removed:
         log(f"Cleaned up {removed} old data file(s)")
 
-
 def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
+    
     now = datetime.now(TZ)
     date_str = now.strftime("%Y-%m-%d")
     data_file = DATA_DIR / f"{date_str}.json"
-
+    
+    # Fetch from all sources
     afd = get_afd()
     alerts = get_alerts()
     forecast = get_forecast()
     hourly = get_hourly()
+    cwop_stations = get_cwop_stations()
+    
     mping_reports = []
-    if MPING_ENABLED:
-        mping_reports = fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24)
-    else:
-        log("[mPING] Disabled (requires API key from mping.ou.edu)")
-
-    new_hash = content_hash(afd, alerts, forecast, hourly, mping_reports)
-
+    if MPING_ENABLED and MPING_API_KEY:
+        mping_reports = fetch_mping()
+    elif MPING_ENABLED:
+        log("[mPING] Enabled but no API key set. Skipping.")
+    
+    new_hash = content_hash(afd, alerts, forecast, hourly, cwop_stations, mping_reports)
+    
     # Check if existing file has identical data
     if data_file.exists():
         try:
@@ -243,27 +103,30 @@ def main():
                 return
         except Exception:
             pass
-
+    
     log(f"Data changed (hash {new_hash}). Saving...")
-
+    
     payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "data_hash": new_hash,
-        "location": {"lat": LAT, "lon": LON, "name": "Anna, TX"},
+        "location": {"lat": 33.349, "lon": -96.548, "name": "Anna, TX"},
         "afd": afd,
         "alerts": alerts,
         "forecast": forecast,
         "hourly": hourly,
-        "mping_updated": datetime.now(timezone.utc).isoformat(),
-        "mping_reports": mping_reports,
+        "cwop_updated": datetime.now(timezone.utc).isoformat(),
+        "cwop_stations": cwop_stations,
     }
-
+    
+    if mping_reports:
+        payload["mping_updated"] = datetime.now(timezone.utc).isoformat()
+        payload["mping_reports"] = mping_reports
+    
     with open(data_file, "w") as f:
         json.dump(payload, f, indent=2)
-
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} mping={len(mping_reports)}")
+    
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} cwop={len(cwop_stations)} mping={len(mping_reports)}")
     cleanup_old()
-
 
 if __name__ == "__main__":
     main()
