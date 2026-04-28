@@ -277,6 +277,74 @@ def compose_imminent(data, imminent_hours):
     return "\n".join(lines)
 
 
+
+def evaluate_mping(data):
+    """Check for significant mPING reports in last hour."""
+    reports = data.get("mping_reports", [])
+    if not reports:
+        return None
+    
+    now = datetime.now(timezone.utc)
+    recent = []
+    
+    for r in reports:
+        try:
+            r_time = datetime.fromisoformat(r["time"].replace("Z", "+00:00"))
+            if (now - r_time).total_seconds() < 3600:  # last hour
+                recent.append(r)
+        except (KeyError, ValueError):
+            continue
+    
+    if not recent:
+        return None
+    
+    # Check for significant reports
+    hail_reports = [r for r in recent if r.get("type") == "hail" and r.get("hail_size", 0) >= 1.0]
+    if hail_reports:
+        sizes = [r.get("hail_size", 0) for r in hail_reports]
+        max_size = max(sizes)
+        locations = []
+        for r in hail_reports[:3]:
+            city = r.get("city", "Unknown")
+            state = r.get("state", "")
+            locations.append(f"{city}, {state}" if state else city)
+        return {
+            "type": "hail",
+            "count": len(hail_reports),
+            "max_size": max_size,
+            "locations": locations,
+        }
+    
+    # Check for heavy rain reports
+    rain_reports = [r for r in recent if "rain" in r.get("type", "").lower()]
+    if rain_reports:
+        return {
+            "type": "rain",
+            "count": len(rain_reports),
+            "details": f"{len(rain_reports)} rain report(s) in last hour"
+        }
+    
+    return None
+
+
+def compose_mping(evaluation):
+    """Compose mPING alert message."""
+    if not evaluation:
+        return ""
+    
+    lines = ["mPING Hyperlocal Report - Anna, TX", ""]
+    
+    if evaluation["type"] == "hail":
+        lines.append(f"Hail reports: {evaluation['count']} in last hour")
+        lines.append(f"Largest: {evaluation['max_size']}" diameter")
+        if evaluation.get("locations"):
+            lines.append(f"Locations: {', '.join(evaluation['locations'])}")
+    elif evaluation["type"] == "rain":
+        lines.append(evaluation["details"])
+    
+    return "\n".join(lines)
+
+
 def main():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     now = datetime.now(TZ)

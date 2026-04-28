@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 
 LAT, LON = 33.349, -96.548
+MPING_ENABLED = False  # Set to True after getting API key from mping.ou.edu
+MPING_API_KEY = ""  # Set this to your mPING API key from mping.ou.edu
 BASE_DIR = Path.home() / "Developer" / "weather-agent"
 DATA_DIR = BASE_DIR / "data"
 LOG_FILE = BASE_DIR / "logs" / "weather-scrape.log"
@@ -121,7 +123,60 @@ def get_hourly():
         return []
 
 
-def content_hash(afd, alerts, forecast, hourly):
+def fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24):
+    """Fetch mPING reports within radius and last N hours.
+    Uses mPING API v2 (requires API key set in MPING_API_KEY).
+    """
+    if not MPING_API_KEY:
+        log("[mPING] No API key set. Skipping.")
+        return []
+    
+    # Calculate time filter
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    obtime_gte = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Build URL with filters
+    params = f"?obtime_gte={obtime_gte}&distance_from_point={lat},{lon},0.3"
+    url = f"https://mping.ou.edu/api/v2/reports{params}"
+    
+    try:
+        headers = {"Authorization": f"Token {MPING_API_KEY}"}
+        req = Request(url, headers={**HEADERS, **headers})
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        reports = data.get("results", [])
+    except Exception as e:
+        log(f"[mPING] Fetch failed: {e}")
+        return []
+    
+    filtered = []
+    for r in reports:
+        try:
+            geom = r.get("geom", {})
+            coords = geom.get("coordinates", [])
+            if len(coords) >= 2:
+                r_lon, r_lat = coords[0], coords[1]
+            else:
+                continue
+            if abs(r_lat - lat) > radius or abs(r_lon - lon) > radius:
+                continue
+            filtered.append({
+                "time": r.get("obtime", ""),
+                "type": r.get("description", "unknown"),
+                "hail_size": r.get("hail_size_inches"),
+                "lat": r_lat,
+                "lon": r_lon,
+                "city": r.get("city", ""),
+                "state": r.get("state", ""),
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
+    
+    log(f"[mPING] Found {len(filtered)} reports in last {hours}h")
+    return filtered
+
+
+def content_hash(afd, alerts, forecast, hourly, mping_reports=None):
     """Hash the meaningful data to detect duplicates."""
     # Use key mutable fields: AFD issued time, alert count + event names, forecast first period name+temp, hourly first 3 temps
     parts = []
@@ -168,8 +223,13 @@ def main():
     alerts = get_alerts()
     forecast = get_forecast()
     hourly = get_hourly()
+    mping_reports = []
+    if MPING_ENABLED:
+        mping_reports = fetch_mping(lat=LAT, lon=LON, radius=0.3, hours=24)
+    else:
+        log("[mPING] Disabled (requires API key from mping.ou.edu)")
 
-    new_hash = content_hash(afd, alerts, forecast, hourly)
+    new_hash = content_hash(afd, alerts, forecast, hourly, mping_reports)
 
     # Check if existing file has identical data
     if data_file.exists():
@@ -194,12 +254,14 @@ def main():
         "alerts": alerts,
         "forecast": forecast,
         "hourly": hourly,
+        "mping_updated": datetime.now(timezone.utc).isoformat(),
+        "mping_reports": mping_reports,
     }
 
     with open(data_file, "w") as f:
         json.dump(payload, f, indent=2)
 
-    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)}")
+    log(f"Saved {data_file}  alerts={len(alerts)} forecast={len(forecast)} hourly={len(hourly)} mping={len(mping_reports)}")
     cleanup_old()
 
 

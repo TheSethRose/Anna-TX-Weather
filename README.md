@@ -1,13 +1,13 @@
 # Weather Agent for Anna, TX
 
-A lightweight, free weather monitoring stack for Anna, Texas using the National Weather Service API. No API keys required.
+A lightweight weather monitoring stack for Anna, Texas using NWS and mPING data. NWS data is free (no API key). mPING requires free API key from mping.ou.edu.
 
 ## Python Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `weather_scrape.py` | NWS data fetcher and storage. Fetches every 15 minutes via launchd agent. |
-| `alert_evaluator.py` | Conditional alert logic. Runs hourly via Hermes cron job. |
+| `weather_scrape.py` | NWS + mPING data fetcher. Fetches NWS every 15 min via launchd. mPING disabled by default (needs API key). |
+| `alert_evaluator.py` | Conditional alert logic. Runs hourly via Hermes cron job. Evaluates mPING reports. |
 | `weather-digest.py` | Weather digest generator. |
 
 ## What They Do
@@ -39,10 +39,21 @@ Each day's JSON (stored locally in `data/`, not in repo) contains:
 - `alerts` — active NWS alerts for the Anna, TX point
 - `forecast` — 7-day forecast periods
 - `hourly` — next 24 hours of hourly data
+- `mping_updated` — last mPING fetch timestamp (if enabled)
+- `mping_reports` — crowdsourced hyperlocal reports (if enabled)
 
-## Why No API Keys?
+## API Keys
 
-The NWS (`api.weather.gov`) is a free, public service. No registration or key required. Just be polite with request frequency.
+### NWS (No Key Required)
+The NWS (`api.weather.gov`) is a free, public service. No registration or key required.
+
+### mPING (Key Required)
+mPING (NOAA Crowdsourced Precipitation Identification Near the Ground) requires a free API key:
+1. Register at [mping.ou.edu](https://mping.ou.edu)
+2. Get your API key from your account settings
+3. Edit `weather_scrape.py`:
+   - Set `MPING_ENABLED = True`
+   - Set `MPING_API_KEY = "your_key_here"`
 
 ## Local Setup
 
